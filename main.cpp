@@ -18,12 +18,15 @@
 
 // constants
 
-const int WIDTH = 512;
-const int HEIGHT = 512;
+const int WIDTH = 1280;
+const int HEIGHT = 720;
 const int CHANNELS = 3;
 const int SIZE = WIDTH * HEIGHT * CHANNELS;
-const char* OUTPUT_FILENAME = "output.png";
-const char* INPUT_FILENAME = "input.ogg";
+const char* OUTPUT_FILENAME = "output/frame";
+const char* INPUT_FILENAME = "input3.ogg";
+const int SPECTROGRAM_SAMPLES = 1024;
+const int NUM_FRAMES = 128;
+const int SAMPLE_SKIP = 735;
 
 // global vars
 
@@ -34,31 +37,8 @@ int audio_channels = 0;
 int audio_samples = 0;
 short* audio_data = nullptr;
 
-
-// Morlet wavelet: psi(t) = exp(i*omega0*t) * exp(-t^2/2)
-std::complex<double> morletWavelet(double t, double omega0 = 6.0)
+struct PixelRGB 
 {
-    return std::exp(std::complex<double>(0, omega0 * t)) * std::exp(-0.5 * t * t);
-}
-
-// Perform CWT at a single scale 'a' and translation 'b'
-// W(a,b) = (1/sqrt(a)) * integral[ x(t) * conj(psi((t-b)/a)) dt ]
-double cwtCoefficient(const std::vector<double>& signal, double a, int b, double dt = 1.0) {
-    std::complex<double> result(0.0, 0.0);
-    double norm = 1.0 / std::sqrt(a);
-    int N = static_cast<int>(signal.size());
-
-    for (int t = 0; t < N; t++) {
-        double tau = (t - b) * dt / a;
-        // Morlet wavelet has negligible support beyond |tau| > 5
-        if (std::abs(tau) > 5.0) continue;
-        result += signal[t] * std::conj(morletWavelet(tau)) * dt;
-    }
-
-    return std::abs(result) * norm;
-}
-
-struct PixelRGB {
     uint8_t r, g, b;
 };
 
@@ -88,58 +68,28 @@ PixelRGB heatmapColor(double v) {
              static_cast<uint8_t>(b * 255) };
 }
 
-/**
- * Continuous Wavelet Transform -> 2D pixel array
- *
- * @param signal     Input digital signal samples
- * @param scales     Vector of scales to analyze (e.g. log-spaced from 1 to 64)
- * @param dt         Sampling interval in seconds (default 1.0)
- * @param logScale   Apply log10 to magnitudes before normalizing (improves visibility)
- *
- * @return           Row-major RGBA pixel buffer [numScales rows x signalLength cols]
- *                   Row 0 = highest scale (lowest frequency) at top
- */
-void generatecwt(
-    const std::vector<double>& signal,
-    const std::vector<double>& scales,
-	std::vector< std::vector<double> >& coeffs,
-    double dt = 1.0,
-    bool logScale = true)
-{
-    int N = static_cast<int>(signal.size());
-    int S = static_cast<int>(scales.size());
-
-    coeffs.reserve(S);
-	for (int i = 0; i < S; i++)
-    {
-        coeffs.emplace_back( std::vector<double>(N) );
-    }
-
-    // --- 1. Compute all CWT coefficients ---
-
-    for (int si = 0; si < S; si++) {
-        double a = scales[si];
-        for (int b = 0; b < N; b++) {
-            coeffs[si][b] = cwtCoefficient(signal, a, b, dt);
-        }
-    }
-
-    // --- 2. Optional log scaling ---
-    if (logScale) {
-        for (auto& row : coeffs)
-            for (auto& v : row)
-                v = std::log10(1.0 + v);
-    }
-}
-
 // --- Utility: generate logarithmically spaced scales ---
-std::vector<double> logScales(double minScale, double maxScale, int numScales) {
-    std::vector<double> scales(numScales);
+void logScales(std::vector<double>& scales, double minScale, double maxScale, int numScales) {
+    scales.resize(numScales);
     double logMin = std::log(minScale);
     double logMax = std::log(maxScale);
     for (int i = 0; i < numScales; i++)
+    {
         scales[i] = std::exp(logMin + i * (logMax - logMin) / (numScales - 1));
-    return scales;
+    }
+}
+
+void GenerateGaussianKernel(std::vector<double>& kernel, int size, double sigma) {
+    kernel.resize(size);
+    int half = size / 2;
+    double sum = 0.0;
+    for (int i = 0; i < size; i++) {
+        double x = i - half;
+        kernel[i] = std::exp(-0.5 * (x * x) / (sigma * sigma));
+        sum += kernel[i];
+    }
+    // Normalize kernel to sum to 1
+    for (double& v : kernel) v /= sum;
 }
 
 void generate_image(std::vector< std::vector<double> >& coeffs)
@@ -154,6 +104,12 @@ void generate_image(std::vector< std::vector<double> >& coeffs)
 
 	const float widthScale = ( coeffs[0].size() - 1 ) / static_cast<float>(WIDTH - 1);
 	const float heightScale = ( coeffs.size() - 1 ) / static_cast<float>(HEIGHT);
+    
+    std::vector<double> gaussiankernel;
+	GenerateGaussianKernel(gaussiankernel, ceil(widthScale*4), 4.0);
+	const int gauss_kernel_size = static_cast<int>(gaussiankernel.size());
+
+	PixelRGB* pixelData = reinterpret_cast<PixelRGB*>(image_data);
     for (int i = 0; i < HEIGHT; i++)
     {
         for (int j = 0; j < WIDTH; j++)
@@ -161,10 +117,27 @@ void generate_image(std::vector< std::vector<double> >& coeffs)
 			const int coefx = static_cast<int>(j * widthScale);
             const int coefy = static_cast<int>(i * heightScale);
 
-			const double normalizedValue = coeffs[coefy][coefx] / maxVal;
-			image_data[i * WIDTH + j] = static_cast<unsigned char>(normalizedValue * 255.0f);
-			image_data[i * CHANNELS + j + 1] = static_cast<unsigned char>(normalizedValue * 255.0f);
-            image_data[i * CHANNELS + j + 2] = static_cast<unsigned char>(normalizedValue * 255.0f);
+
+			double val = 0.0;
+			const double normval = coeffs[coefy][coefx] / maxVal;
+            val = (normval + 1) * 0.5;
+#if 0
+            for( int k = 0; k < gauss_kernel_size; k++)
+            {
+                int samplex = coefx + k - gauss_kernel_size / 2;
+                if (samplex >= 0 && samplex < static_cast<int>(coeffs[coefy].size()))
+                {
+                    const double normval = coeffs[coefy][samplex] / maxVal;
+                    const double posval = (normval + 1) * 0.5; // map [-1,1] to [0,1]
+                    val += posval * gaussiankernel[k];
+                }
+			}
+#endif
+
+            PixelRGB& pixel = pixelData[i * WIDTH + j];
+            pixel.r = val * 255; // heatmapColor(posval);
+            pixel.b = val * 255;
+            pixel.g = val * 255;
         }
         
     }
@@ -176,7 +149,38 @@ static int readsignal()
 	assert(audio_channels == 1); // only mono supported for now
     if (result < 0) return result;
     audio_samples = result;
+    // audio_samples = WIDTH*0.5;
     return 0;
+}
+
+static void convolve( const std::vector<double>& signal, int startsample, const std::vector<double>& kernel, std::vector<double>& output) {
+    int signalSize = static_cast<int>(signal.size());
+    int kernelSize = static_cast<int>(kernel.size());
+    int halfKernel = kernelSize / 2;
+    output.resize(SPECTROGRAM_SAMPLES, 0.0);
+    for (int i = 0; i < SPECTROGRAM_SAMPLES; i++)
+    {
+        double sum = 0.0;
+        for (int k = 0; k < kernelSize; k++)
+        {
+            int signalIndex = startsample + i + k - halfKernel;
+            if (signalIndex >= 0 && signalIndex < signalSize)
+            {
+                sum += signal[signalIndex] * kernel[k];
+            }
+        }
+        output[i] = sum;
+    }
+}
+
+static void generatemorlet(std::vector<double>& kernel, int num_samples, double k ) {
+    kernel.resize(num_samples);
+    const double falloff = 0.5;
+    const double extent = 6;
+    for (int i = 0; i < num_samples; i++) {
+        double t = double(i)/num_samples * extent * 2 - extent;
+        kernel[i] = std::exp(-std::abs( t * falloff) ) * std::cos(3.1415 * 2 * t * k);
+    }
 }
 
 int main(int argc, char** argv)
@@ -194,14 +198,38 @@ int main(int argc, char** argv)
     std::vector<double> signalvector;
 	for (int i = 0; i < audio_samples; i++)
     {
-        signalvector.push_back( static_cast<double>(audio_data[i]) );
+        signalvector.push_back( static_cast<double>(audio_data[i]) / std::_Max_limit< short >() );
     }
-	const int numscales = 128;
-	std::vector< std::vector<double> > cwtCoeffs;
-    generatecwt(signalvector, logScales(1, 64, numscales), cwtCoeffs, 1.0, true);
-	generate_image( cwtCoeffs );
 
-    stbi_write_png(OUTPUT_FILENAME, WIDTH, HEIGHT, CHANNELS, image_data, WIDTH * CHANNELS);
+    std::vector< std::vector<double> > cwtCoeffs;
+    std::vector<double> kernel;
+
+    int signallen = static_cast<int>(signalvector.size());
+
+    std::vector< double > scales;
+    logScales(scales, 1.1, 4.5, HEIGHT);
+
+	char outputfilename[256];
+
+    for (int s = 0; s < NUM_FRAMES; ++s)
+    {
+        cwtCoeffs.clear();
+        cwtCoeffs.reserve(HEIGHT);
+
+        for (int i = 0; i < HEIGHT; i++)
+        {
+            cwtCoeffs.emplace_back(std::vector<double>(SPECTROGRAM_SAMPLES));
+
+            const int in_kernel_size = WIDTH * 0.25;
+            // flip the scales so that higher frequencies are at the top of the image
+            const double scale = scales[HEIGHT - (i + 1)];
+            generatemorlet(kernel, in_kernel_size, scale - 1);
+            convolve(signalvector, s * SAMPLE_SKIP, kernel, cwtCoeffs.back());
+        }
+        generate_image(cwtCoeffs);
+		sprintf(outputfilename, "%s_%04d.png", OUTPUT_FILENAME, s);
+        stbi_write_png(outputfilename, WIDTH, HEIGHT, CHANNELS, image_data, WIDTH * CHANNELS);
+    }
 
     free( audio_data );
     delete[] image_data;
