@@ -29,18 +29,18 @@ inline void MultiplyBlend(const PixelRGB& a, const PixelRGB& b, PixelRGB& out )
 }
 
 // Generate logarithmically spaced scales
-static void logScales(std::vector<double>& scales, double minScale, double maxScale, int numScales)
+static void logScales(std::vector<float>& scales, float min_scale, float max_scale, int num_scales)
 {
-	scales.resize(numScales);
-	double logMin = std::log(minScale);
-	double logMax = std::log(maxScale);
-	for (int i = 0; i < numScales; i++)
+	scales.resize(num_scales);
+	const float log_min = std::log(min_scale);
+	const float log_max = std::log(max_scale);
+	for (int i = 0; i < num_scales; i++)
 	{
-		scales[i] = std::exp(logMin + i * (logMax - logMin) / (numScales - 1));
+		scales[i] = std::exp(log_min + i * (log_max - log_min) / (num_scales - 1));
 	}
 }
 
-static void Convolve( const std::vector<float>& signal, int startsample, const std::vector<double>& kernel, std::vector<double>& output)
+static void Convolve( const std::vector<float>& signal, int startsample, const std::vector<float>& kernel, std::vector<float>& output)
 {
 	const int signal_size = static_cast<int>(signal.size());
 	const int kernel_size = static_cast<int>(kernel.size());
@@ -49,7 +49,7 @@ static void Convolve( const std::vector<float>& signal, int startsample, const s
 	output.resize(spectrogram_samples, 0.0);
 	for (int i = 0; i < spectrogram_samples; i++)
 	{
-		double sum = 0.0;
+		float sum = 0.0;
 		for (int k = 0; k < kernel_size; k++)
 		{
 			int signal_index = startsample + i + k - half_kernel;
@@ -62,15 +62,15 @@ static void Convolve( const std::vector<float>& signal, int startsample, const s
 	}
 }
 
-static void GenerateMorlet(std::vector<double>& kernel, int num_samples, double k ) 
+static void GenerateMorlet(std::vector<float>& kernel, int num_samples, float k ) 
 {
 	kernel.resize(num_samples);
-	const double falloff = 0.5;
-	const double extent = 6;
+	const float falloff = 0.5f;
+	const float extent = 6.0f;
 	for (int i = 0; i < num_samples; i++)
 	{
-		double t = double(i)/num_samples * extent * 2 - extent;
-		kernel[i] = std::exp(-std::abs( t * falloff) ) * std::cos(3.1415 * 2 * t * k);
+		const float t = float(i)/num_samples * extent * 2.0f - extent;
+		kernel[i] = std::exp(-std::abs( t * falloff) ) * std::cos(3.1415f * 2.0f * t * k);
 	}
 }
 
@@ -271,11 +271,11 @@ int main(int argc, char** argv)
 
 	// Generate wavelets
 	
-	std::vector< std::vector<double> > cwt_coeffs;
-    std::vector<double> wavlet_kernel;
+	std::vector< std::vector<float> > cwt_coeffs;
+    std::vector<float> wavlet_kernel;
 
-    std::vector< double > scales;
-    logScales( scales, 1.0, 3, image_height );
+    std::vector< float > scales;
+    logScales( scales, 1.0f, 3.0f, image_height );
 
 	std::string outputfilename;
 
@@ -299,11 +299,11 @@ int main(int argc, char** argv)
 
 		for (int i = 0; i < image_height; i++)
 		{
-			cwt_coeffs.emplace_back(std::vector<double>(spectrogram_samples));
+			cwt_coeffs.emplace_back(std::vector<float>(spectrogram_samples));
 
-			const int in_kernel_size = image_width * 0.25;
+			const int in_kernel_size = image_width * 0.25f;
 			// flip the scales so that higher frequencies are at the top of the image
-			const double scale = scales[image_height - (i + 1)];
+			const float scale = scales[image_height - (i + 1)];
 			GenerateMorlet(wavlet_kernel, in_kernel_size, scale - 1);
 			Convolve( signalvector, sample + s * sample_offset, wavlet_kernel, cwt_coeffs.back() );
 		}
@@ -314,23 +314,23 @@ int main(int argc, char** argv)
 		const float height_scale = (cwt_coeffs.size() - 1) / static_cast<float>(image_height);
 
 		// Normalise
-		double maxVal = 0.0;
+		float maxVal = 0.0f;
 		for (const auto& row : cwt_coeffs)
 		{
-			for (double v : row)
+			for (float v : row)
 			{
 				maxVal = std::max(maxVal, abs(v));
 			}
 		}
-		if (maxVal == 0.0) maxVal = 1.0;
+		if (maxVal == 0.0f) maxVal = 1.0f;
 
 		// Bayer matrix for dithering (4x4)
 		constexpr int BAYER_SIZE = 4;
-		constexpr double BAYER4[BAYER_SIZE][BAYER_SIZE] = {
-			{ 0, 0.5, 0.125, 0.625 },
-			{ 0.75, 0.25, 0.875, 0.375 },
-			{ 0.1875, 0.6875, 0.0625, 0.5625 },
-			{ 0.9375, 0.4375, 0.8125, 0.3125 } };
+		constexpr float BAYER4[BAYER_SIZE][BAYER_SIZE] = {
+			{ 0.0f, 0.5f, 0.125f, 0.625f },
+			{ 0.75f, 0.25f, 0.875f, 0.375f },
+			{ 0.1875f, 0.6875f, 0.0625f, 0.5625f },
+			{ 0.9375f, 0.4375f, 0.8125f, 0.3125f } };
 
 		PixelRGB* pixelData = reinterpret_cast<PixelRGB*>(image_data);
 		for (int i = 0; i < image_height; i++)
@@ -340,38 +340,38 @@ int main(int argc, char** argv)
 				const int coefx = static_cast<int>(j * width_scale);
 				const int coefy = static_cast<int>(i * height_scale);
 
-				double val = 0.0;
+				float val = 0.0;
 
 				if (width_scale > 1 || j == image_width - 1)
 				{
-					const double normval = cwt_coeffs[coefy][coefx] / maxVal;
-					val = (normval + 1) * 0.5;
+					const float normval = cwt_coeffs[coefy][coefx] / maxVal;
+					val = (normval + 1) * 0.5f;
 				}
 				else
 				{
 					// Bilinear interpolation if the spectrogram has less horizontal resolution than the output image
 					float frac = (j * width_scale) - coefx;
-					double interp = std::lerp(cwt_coeffs[coefy][coefx], cwt_coeffs[coefy][coefx + 1], frac);
-					const double normval = interp / maxVal;
-					val = (normval + 1) * 0.5;
+					float interp = std::lerp(cwt_coeffs[coefy][coefx], cwt_coeffs[coefy][coefx + 1], frac);
+					const float normval = interp / maxVal;
+					val = (normval + 1) * 0.5f;
 				}
 
 				PixelRGB& pixel = pixelData[i * image_width + j];
 
 				// Dithering using Bayer matrix to reduce banding artifacts when mapping the spectrogram values to the
 				// heatmap and gradiantmap
-				const double bayerval = BAYER4[j % BAYER_SIZE][i % BAYER_SIZE];
-				double heatmapidxfloat = val * (HEATMAP_SIZE - 1);
-				double frac = heatmapidxfloat - static_cast<int>(heatmapidxfloat);
+				const float bayerval = BAYER4[j % BAYER_SIZE][i % BAYER_SIZE];
+				float heatmapidxfloat = val * (HEATMAP_SIZE - 1);
+				float frac = heatmapidxfloat - static_cast<int>(heatmapidxfloat);
 				int offset = (frac > bayerval) ? 1 : 0;
 				const int heatmapidx = std::min(static_cast<int>(heatmapidxfloat) + offset, HEATMAP_SIZE - 1);
 
-				double gradientmapsamplexfloat = static_cast<float>(j) / image_width * (GRADIENTMAP_SIZE - 1);
+				float gradientmapsamplexfloat = static_cast<float>(j) / image_width * (GRADIENTMAP_SIZE - 1);
 				frac = gradientmapsamplexfloat - static_cast<int>(gradientmapsamplexfloat);
 				offset = (frac > bayerval) ? 1 : 0;
 				const int gradientmapsamplex = std::min(static_cast<int>(gradientmapsamplexfloat) + offset, HEATMAP_SIZE - 1);
 
-				double gradientmapsampleyfloat = static_cast<float>(i) / image_height * (GRADIENTMAP_SIZE - 1);
+				float gradientmapsampleyfloat = static_cast<float>(i) / image_height * (GRADIENTMAP_SIZE - 1);
 				frac = gradientmapsampleyfloat - static_cast<int>(gradientmapsampleyfloat);
 				offset = (frac > bayerval) ? 1 : 0;
 				const int gradientmapsampley = std::min(static_cast<int>(gradientmapsampleyfloat) + offset, HEATMAP_SIZE - 1);
