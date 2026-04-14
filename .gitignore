@@ -2,3 +2,8 @@
 /x64
 /ImageTest/x64
 /ImageTest/output
+cwt_image.vcxproj.user
+/cwt_image/x64
+/input
+/output
+run.bat

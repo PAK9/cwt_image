@@ -12,11 +12,13 @@
 #include <vector>
 
 // stb
+#pragma warning(push, 0)
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 #include "stb_vorbis.c"
+#pragma warning(default)
 
 // structs
 struct PixelRGB { uint8_t r, g, b; };
@@ -29,7 +31,7 @@ inline void MultiplyBlend(const PixelRGB& a, const PixelRGB& b, PixelRGB& out )
 }
 
 // Generate logarithmically spaced scales
-static void logScales(std::vector<float>& scales, float min_scale, float max_scale, int num_scales)
+static void LogScales(std::vector<float>& scales, float min_scale, float max_scale, int num_scales)
 {
 	scales.resize(num_scales);
 	const float log_min = std::log(min_scale);
@@ -45,7 +47,7 @@ static void Convolve( const std::vector<float>& signal, int startsample, const s
 	const int signal_size = static_cast<int>(signal.size());
 	const int kernel_size = static_cast<int>(kernel.size());
 	const int half_kernel = kernel_size / 2;
-	const int spectrogram_samples = output.size();
+	const int spectrogram_samples = static_cast<int>( output.size() );
 	output.resize(spectrogram_samples, 0.0);
 	for (int i = 0; i < spectrogram_samples; i++)
 	{
@@ -161,7 +163,7 @@ int main(int argc, char** argv)
 
 	// generate the heatmap
 
-	constexpr int HEATMAP_SIZE = 256;
+	constexpr int HEATMAP_SIZE = 1024;
 	std::vector<PixelRGB> heatmap;
 	heatmap.resize(HEATMAP_SIZE);
 	if( !heatmap_filename.empty() )
@@ -181,10 +183,11 @@ int main(int argc, char** argv)
 		}
 		for (int i = 0; i < HEATMAP_SIZE; i++)
 		{
-			int x = (i * colourmap_width) / HEATMAP_SIZE;
-			heatmap[i].r = colourmap_data[(x * 3) + 0];
-			heatmap[i].g = colourmap_data[(x * 3) + 1];
-			heatmap[i].b = colourmap_data[(x * 3) + 2];
+			const int x1 = (i * colourmap_width) / HEATMAP_SIZE;
+			const int x2 = ( i == HEATMAP_SIZE - 1 ) ? x1 : ((i+1) * colourmap_width) / HEATMAP_SIZE;
+			heatmap[i].r = (colourmap_data[(x1 * 3) + 0] + colourmap_data[(x2 * 3) + 0]) / 2;
+			heatmap[i].g = (colourmap_data[(x1 * 3) + 1] + colourmap_data[(x2 * 3) + 1]) / 2;
+			heatmap[i].b = (colourmap_data[(x1 * 3) + 2] + colourmap_data[(x2 * 3) + 2]) / 2;
 		}
 		stbi_image_free(colourmap_data);
 	}
@@ -194,9 +197,9 @@ int main(int argc, char** argv)
 
 		for (int i = 0; i < HEATMAP_SIZE; i++)
 		{
-			heatmap[i].r = static_cast< float >( i ) / HEATMAP_SIZE * 255;
-			heatmap[i].g = static_cast< float >( i ) / HEATMAP_SIZE * 255;
-			heatmap[i].b = static_cast< float >( i ) / HEATMAP_SIZE * 255;
+			heatmap[i].r = static_cast<uint8_t>( static_cast< float >( i ) / HEATMAP_SIZE * 255 );
+			heatmap[i].g = static_cast<uint8_t>( static_cast< float >( i ) / HEATMAP_SIZE * 255 );
+			heatmap[i].b = static_cast<uint8_t>( static_cast< float >( i ) / HEATMAP_SIZE * 255 );
 		}
 	}
 	
@@ -275,12 +278,12 @@ int main(int argc, char** argv)
     std::vector<float> wavlet_kernel;
 
     std::vector< float > scales;
-    logScales( scales, 1.0f, 3.0f, image_height );
+    LogScales( scales, 1.0f, 3.0f, image_height );
 
 	std::string outputfilename;
 
 	const int signallen = static_cast<int>(signalvector.size());
-	const int sample = input_start_skip * audio_sample_rate;
+	const int sample = static_cast<int>(input_start_skip * audio_sample_rate);
 	if( sample + num_frames * sample_offset + spectrogram_samples > signallen )
 	{
 		std::cerr << "Error: Not enough audio samples for the requested number of frames and sample skip." << std::endl;
@@ -301,7 +304,8 @@ int main(int argc, char** argv)
 		{
 			cwt_coeffs.emplace_back(std::vector<float>(spectrogram_samples));
 
-			const int in_kernel_size = image_width * 0.25f;
+			// const int in_kernel_size = static_cast< int >( image_width * 0.25f );
+			const int in_kernel_size = static_cast< int >( 256 );
 			// flip the scales so that higher frequencies are at the top of the image
 			const float scale = scales[image_height - (i + 1)];
 			GenerateMorlet(wavlet_kernel, in_kernel_size, scale - 1);
@@ -350,8 +354,10 @@ int main(int argc, char** argv)
 				else
 				{
 					// Bilinear interpolation if the spectrogram has less horizontal resolution than the output image
-					float frac = (j * width_scale) - coefx;
-					float interp = std::lerp(cwt_coeffs[coefy][coefx], cwt_coeffs[coefy][coefx + 1], frac);
+					const float frac = (j * width_scale) - coefx;
+					#define LERP(a_,b_,t_) a_ + t_ * (b_ - a_)
+                    const float interp = LERP(cwt_coeffs[coefy][coefx], cwt_coeffs[coefy][coefx + 1], frac);
+					#undef LERP
 					const float normval = interp / maxVal;
 					val = (normval + 1) * 0.5f;
 				}
